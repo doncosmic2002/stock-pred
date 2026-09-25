@@ -76,7 +76,7 @@ TICKERS = {
     "usdjpy":     "USDJPY=X",
     "nikkei_fut": "NKD=F",
 }
-END_DATE   = datetime.now().strftime("%Y-%m-%d")
+END_DATE   = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")  # exclusive → +1日で当日データを取得
 START_DATE = (datetime.now() - timedelta(days=365 * 10 + 30)).strftime("%Y-%m-%d")
 SEQ_LEN    = 20   # LSTM の参照日数
 
