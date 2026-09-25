@@ -1216,7 +1216,36 @@ with tab_dash:
             unsafe_allow_html=True,
         )
 
-    st.markdown(f"### 翌営業日の予測まとめ　→　**{pred_date.strftime('%m/%d')}**")
+    # ── ホライズン計算（選択日まで何営業日か） ──
+    _last_data_date = df["close"].dropna().index[-1].date()
+    _n_bdays = max(1, int(np.busday_count(_last_data_date, pred_date)))
+
+    if _n_bdays <= 1:
+        _hlabel     = "D+1　翌営業日"
+        _hpred      = ensemble_pred
+        _model_note = "アンサンブル（全モデル平均）"
+    elif _n_bdays == 2:
+        _hlabel     = "D+2　2営業日後"
+        _hpred      = multiday_preds[2]
+        _model_note = "D+2 LightGBM"
+    elif _n_bdays == 3:
+        _hlabel     = "D+3　3営業日後"
+        _hpred      = multiday_preds[3]
+        _model_note = "D+3 LightGBM"
+    else:
+        _hlabel     = f"D+5　翌週（5営業日）"
+        _hpred      = multiday_preds[5]
+        _model_note = "D+5 LightGBM"
+        if _n_bdays > 5:
+            st.warning(
+                f"D+{_n_bdays} は対応モデルがありません。"
+                f"最大ホライズンの D+5 モデルで代替表示します。"
+            )
+
+    st.markdown(
+        f"### {pred_date.strftime('%m/%d (%a)')} の予測　"
+        f"— **{_hlabel}** / {_model_note}"
+    )
 
     # ── 1. 大ブレ警戒バナー + ボリバンタグ ──
     col_warn, col_bbtag = st.columns([2, 1])
@@ -1261,14 +1290,21 @@ with tab_dash:
     st.divider()
 
     # ── 3. 高値・安値 棒グラフ ──
-    all_tomorrow = {
-        "LightGBM":       sklearn_preds["LightGBM"],
-        "SVR":            sklearn_preds["SVR"],
-        "ランダムフォレスト": sklearn_preds["ランダムフォレスト"],
-        "アンサンブル":    ensemble_pred,
-    }
-    if lstm_pred:
-        all_tomorrow["LSTM"] = lstm_pred
+    # D+1 は全モデル表示、D+2以降は選択ホライズンモデル＋D+1アンサンブル（参考）
+    if _n_bdays <= 1:
+        all_tomorrow = {
+            "LightGBM":       sklearn_preds["LightGBM"],
+            "SVR":            sklearn_preds["SVR"],
+            "ランダムフォレスト": sklearn_preds["ランダムフォレスト"],
+            "アンサンブル":    ensemble_pred,
+        }
+        if lstm_pred:
+            all_tomorrow["LSTM"] = lstm_pred
+    else:
+        all_tomorrow = {
+            f"D+{_n_bdays} LightGBM": _hpred,
+            "D+1 アンサンブル（参考）": ensemble_pred,
+        }
 
     model_names = list(all_tomorrow.keys())
 
@@ -1350,10 +1386,10 @@ with tab_dash:
 
     st.divider()
 
-    # ── 5. 上昇確率 横並び ──
-    st.markdown("#### 上昇確率　各モデル比較")
-    cols = st.columns(len(all_tomorrow))
-    for col, (mname, p) in zip(cols, all_tomorrow.items()):
+    # ── 5. 上昇確率 横並び（選択ホライズンモデルを強調）──
+    st.markdown(f"#### 上昇確率　{_hlabel}")
+    prob_cols = st.columns(len(all_tomorrow))
+    for col, (mname, p) in zip(prob_cols, all_tomorrow.items()):
         with col:
             color = "🟢" if p["prob_up"] >= 0.5 else "🔴"
             st.markdown(f"**{mname}**")
@@ -1362,29 +1398,30 @@ with tab_dash:
 
     st.divider()
 
-    # ── 6. 予測まとめテーブル（バイアス補正行追加）──
-    st.markdown("#### 予測一覧テーブル")
+    # ── 6. 予測まとめテーブル ──
+    st.markdown(f"#### 予測一覧テーブル　（{pred_date.strftime('%m/%d')} / {_hlabel}）")
     summary_rows = []
     for mname, p in all_tomorrow.items():
         dir_label = "上昇 ↑" if p["dir"] == 1 else "下落 ↓"
         dprob = p["prob_up"] if p["dir"] == 1 else p["prob_down"]
         summary_rows.append({
-            "モデル":   mname,
-            "予測 高値": f"¥{p['high_yen']:,.0f}",
-            "予測 安値": f"¥{p['low_yen']:,.0f}",
-            "終値方向":  dir_label,
-            "確率":     f"{dprob:.1%}",
+            "モデル":    mname,
+            "予測 高値":  f"¥{p['high_yen']:,.0f}  ({p['high_pct']:+.2f}%)",
+            "予測 安値":  f"¥{p['low_yen']:,.0f}  ({p['low_pct']:+.2f}%)",
+            "終値方向":   dir_label,
+            "上昇確率":   f"{dprob:.1%}",
         })
-    # バイアス補正アンサンブル行
-    bc_dir_label = "上昇 ↑" if bias_corrected["dir"] == 1 else "下落 ↓"
-    bc_dprob = bias_corrected["prob_up"] if bias_corrected["dir"] == 1 else bias_corrected["prob_down"]
-    summary_rows.append({
-        "モデル":   "バイアス補正アンサンブル",
-        "予測 高値": f"¥{bias_corrected['high_yen']:,.0f}",
-        "予測 安値": f"¥{bias_corrected['low_yen']:,.0f}",
-        "終値方向":  bc_dir_label,
-        "確率":     f"{bc_dprob:.1%}",
-    })
+    # D+1 のときのみバイアス補正行を追加
+    if _n_bdays <= 1:
+        bc_dir = "上昇 ↑" if bias_corrected["dir"] == 1 else "下落 ↓"
+        bc_prob = bias_corrected["prob_up"] if bias_corrected["dir"] == 1 else bias_corrected["prob_down"]
+        summary_rows.append({
+            "モデル":    "🎯 バイアス補正アンサンブル",
+            "予測 高値":  f"¥{bias_corrected['high_yen']:,.0f}  ({bias_corrected['high_pct']:+.2f}%)",
+            "予測 安値":  f"¥{bias_corrected['low_yen']:,.0f}  ({bias_corrected['low_pct']:+.2f}%)",
+            "終値方向":   bc_dir,
+            "上昇確率":   f"{bc_prob:.1%}",
+        })
     st.dataframe(
         pd.DataFrame(summary_rows).set_index("モデル"),
         use_container_width=True,
