@@ -983,29 +983,29 @@ def build_backtest_rows(models_eval: dict, test_info: dict,
             drow[f"LSTM({hit})"] = "上昇↑" if dp == 1 else "下落↓"
         dir_rows.append(drow)
 
-        # ── 高値/安値テーブル（Hit/Missフラグ付き）──
-        hrow = {
-            "日付":       dt.strftime("%m/%d(%a)"),
-            "実際 高値%":  f"{rh:+.2f}%",
-            "実際 安値%":  f"{rl:+.2f}%",
-        }
+        # ── 高値/安値テーブル（列順: 日付 → 実際高値 → 各モデル高値 → 実際安値 → 各モデル安値）──
+        hrow = {"日付": dt.strftime("%m/%d(%a)"), "実際 高値%": f"{rh:+.2f}%"}
+        # 各モデルの高値予測を全部並べる
         for mname, ev in models_eval.items():
-            short = {"LightGBM":"LGB","SVR":"SVR","ランダムフォレスト":"RF","アンサンブル":"ENS"}[mname]
-            ph_val = ev["ph"][si]
-            pl_val = ev["pl"][si]
-            # Hit判定: 実際の高値が予測高値以上なら到達✓
+            short    = {"LightGBM":"LGB","SVR":"SVR","ランダムフォレスト":"RF","アンサンブル":"ENS"}[mname]
+            ph_val   = ev["ph"][si]
             high_hit = "✓" if rh >= ph_val else "✗"
-            # Hit判定: 実際の安値が予測安値以下なら到達✓
-            low_hit  = "✓" if rl <= pl_val else "✗"
-            hrow[f"{short} 高値%({high_hit})"] = f"{ph_val:+.2f}%"
-            hrow[f"{short} 安値%({low_hit})"]  = f"{pl_val:+.2f}%"
+            hrow[f"{short} 高値({high_hit})"] = f"{ph_val:+.2f}%"
         if dt in lstm_date_ph:
-            ph_val = lstm_date_ph[dt]
-            pl_val = lstm_date_pl[dt]
+            ph_val   = lstm_date_ph[dt]
             high_hit = "✓" if rh >= ph_val else "✗"
-            low_hit  = "✓" if rl <= pl_val else "✗"
-            hrow[f"LSTM 高値%({high_hit})"] = f"{ph_val:+.2f}%"
-            hrow[f"LSTM 安値%({low_hit})"]  = f"{pl_val:+.2f}%"
+            hrow[f"LSTM 高値({high_hit})"] = f"{ph_val:+.2f}%"
+        # 実際安値 → 各モデルの安値予測を全部並べる
+        hrow["実際 安値%"] = f"{rl:+.2f}%"
+        for mname, ev in models_eval.items():
+            short   = {"LightGBM":"LGB","SVR":"SVR","ランダムフォレスト":"RF","アンサンブル":"ENS"}[mname]
+            pl_val  = ev["pl"][si]
+            low_hit = "✓" if rl <= pl_val else "✗"
+            hrow[f"{short} 安値({low_hit})"] = f"{pl_val:+.2f}%"
+        if dt in lstm_date_pl:
+            pl_val  = lstm_date_pl[dt]
+            low_hit = "✓" if rl <= pl_val else "✗"
+            hrow[f"LSTM 安値({low_hit})"] = f"{pl_val:+.2f}%"
         hl_rows.append(hrow)
 
     # 最新日付を先頭に（降順）
@@ -1171,11 +1171,11 @@ dist_from_max100_last = df["dist_from_max100"].dropna().iloc[-1] if "dist_from_m
 # ─────────────────────────────────────────
 # タブ (10つ)
 # ─────────────────────────────────────────
-(tab_dash, tab_dir, tab_hl, tab_week, tab_multi,
+(tab_dash, tab_hl, tab_dir, tab_week, tab_multi,
  tab_lgb, tab_svr, tab_rf, tab_ens, tab_lstm, tab_bb) = st.tabs([
     "🏠 ダッシュボード",
-    "🔍 過去10日（方向性）",
     "📈 過去10日（高値/安値）",
+    "🔍 過去10日（方向性）",
     "📅 週着地",
     "🔮 多日先予測",
     "🤖 LightGBM",
