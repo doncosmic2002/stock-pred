@@ -123,6 +123,22 @@ BB_MAX_TAG_INFO = {
 }
 
 # ─────────────────────────────────────────
+# 予測対象日のデフォルト計算（JST 15:30 基準）
+# ─────────────────────────────────────────
+def get_default_prediction_date():
+    """
+    15:30(JST)前  → 本日（当日予測）
+    15:30(JST)以降 → 翌営業日（日本市場クローズ後）
+    土日はスキップして次の月曜日へ
+    """
+    now_jst = datetime.utcnow() + timedelta(hours=9)
+    cutoff   = now_jst.replace(hour=15, minute=30, second=0, microsecond=0)
+    base     = now_jst.date() if now_jst < cutoff else now_jst.date() + timedelta(days=1)
+    while base.weekday() >= 5:   # 土(5)・日(6) をスキップ
+        base += timedelta(days=1)
+    return base
+
+# ─────────────────────────────────────────
 # SQ 日（各月第2金曜日）計算
 # ─────────────────────────────────────────
 def get_sq_dates(year_from: int, year_to: int) -> list:
@@ -1045,7 +1061,33 @@ dist_from_max100_last = df["dist_from_max100"].dropna().iloc[-1] if "dist_from_m
 # ── ダッシュボードタブ ──
 # ════════════════════════════════════════
 with tab_dash:
-    st.markdown(f"### 翌営業日の予測まとめ　（基準終値 ¥{last_close:,.0f} / {last_date}）")
+    # ── 0. 予測対象日カレンダー ──
+    _default_date = get_default_prediction_date()
+    _now_jst      = datetime.utcnow() + timedelta(hours=9)
+    _after_close  = _now_jst >= _now_jst.replace(hour=15, minute=30, second=0, microsecond=0)
+    _timing_label = "15:30以降（クローズ後）" if _after_close else "15:30前（取引中）"
+
+    cal_col, info_col = st.columns([1, 2])
+    with cal_col:
+        pred_date = st.date_input(
+            "📅 予測対象日",
+            value=_default_date,
+            min_value=datetime.now().date(),
+            help="予測したい営業日を選択。15:30前は当日・以降は翌営業日が自動セットされます",
+        )
+    with info_col:
+        st.markdown(
+            f"<div style='background:#1a2a3a;border:1px solid #63A0FF;"
+            f"border-radius:6px;padding:10px 14px;margin-top:6px;'>"
+            f"<b>予測対象</b>: {pred_date.strftime('%Y年%m月%d日（%a）')}<br>"
+            f"<b>基準終値</b>: ¥{last_close:,.0f}　（{last_date}）<br>"
+            f"<span style='font-size:0.85em;color:#aaa;'>現在時刻 (JST): "
+            f"{_now_jst.strftime('%H:%M')}　{_timing_label}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f"### 翌営業日の予測まとめ　→　**{pred_date.strftime('%m/%d')}**")
 
     # ── 1. 大ブレ警戒バナー + ボリバンタグ ──
     col_warn, col_bbtag = st.columns([2, 1])
