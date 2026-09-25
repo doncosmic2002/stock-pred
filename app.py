@@ -179,6 +179,16 @@ def fetch_data() -> dict:
             pass
     return result
 
+def _bb_max_tag_fn(bb_pct, dist):
+    if pd.isna(bb_pct) or pd.isna(dist):
+        return np.nan
+    if bb_pct > 1.0 and dist >= -3:   return 5
+    if bb_pct > 0.8 and dist >= -3:   return 4
+    if bb_pct > 0.8:                  return 3
+    if bb_pct < 0.0 and dist < -15:   return 0
+    if bb_pct < 0.2:                  return 1
+    return 2
+
 # ─────────────────────────────────────────
 # 特徴量エンジニアリング（全て相対値）
 # ─────────────────────────────────────────
@@ -244,23 +254,8 @@ def build_features(dfs: dict) -> pd.DataFrame:
     nk["max100"] = nk["high"].rolling(100).max()
     nk["dist_from_max100"] = (c / nk["max100"] - 1) * 100  # always <= 0
 
-    def _bb_max_tag(bb_pct, dist):
-        if pd.isna(bb_pct) or pd.isna(dist):
-            return np.nan
-        if bb_pct > 1.0 and dist >= -3:
-            return 5  # 最高値圏BB突破
-        if bb_pct > 0.8 and dist >= -3:
-            return 4  # 高値圏BB上限
-        if bb_pct > 0.8:
-            return 3  # 高値圏中央以上
-        if bb_pct < 0.0 and dist < -15:
-            return 0  # 下落圏BB割れ
-        if bb_pct < 0.2:
-            return 1  # 下落圏BB下限
-        return 2       # 中立圏
-
     nk["bb_max_tag"] = nk.apply(
-        lambda row: _bb_max_tag(row["bb_pct"], row["dist_from_max100"]), axis=1
+        lambda row: _bb_max_tag_fn(row["bb_pct"], row["dist_from_max100"]), axis=1
     )
 
     next_high  = nk["high"].shift(-1)
@@ -269,6 +264,24 @@ def build_features(dfs: dict) -> pd.DataFrame:
     nk["target_high_pct"] = (next_high  / c - 1) * 100
     nk["target_low_pct"]  = (next_low   / c - 1) * 100
     nk["target_dir"]      = (next_close > c).astype(int)
+
+    # ── 多日先ターゲット（2日・3日・5日）──
+    h_arr  = nk["high"].values
+    l_arr  = nk["low"].values
+    c_arr  = c.values
+    n_rows = len(nk)
+    for horizon in [2, 3, 5]:
+        high_nd  = np.full(n_rows, np.nan)
+        low_nd   = np.full(n_rows, np.nan)
+        close_nd = np.full(n_rows, np.nan)
+        for i in range(n_rows - horizon):
+            high_nd[i]  = np.nanmax(h_arr[i + 1 : i + horizon + 1])
+            low_nd[i]   = np.nanmin(l_arr[i + 1 : i + horizon + 1])
+            close_nd[i] = c_arr[i + horizon]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            nk[f"target_high_{horizon}d"]  = np.where(c_arr > 0, (high_nd  / c_arr - 1) * 100, np.nan)
+            nk[f"target_low_{horizon}d"]   = np.where(c_arr > 0, (low_nd   / c_arr - 1) * 100, np.nan)
+            nk[f"target_dir_{horizon}d"]   = (close_nd > c_arr).astype(float)
 
     return nk
 
@@ -501,6 +514,70 @@ def ensemble_test_metrics(models: dict, test_info: dict) -> dict:
     )
 
 # ─────────────────────────────────────────
+# 多日先モデル学習（LightGBM: 2日・3日・5日）
+# ─────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def train_multiday_models(cache_key: str, _df: pd.DataFrame, years: int) -> dict:
+    """2日先・3日先・5日先の LightGBM を学習してメトリクスを返す"""
+    cutoff  = _df.index[-1] - pd.DateOffset(years=years)
+    results = {}
+    cb  = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)]
+    lgp = dict(n_estimators=500, learning_rate=0.03, num_leaves=31,
+               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=5,
+               random_state=42, n_jobs=-1, verbose=-1)
+
+    for n in [2, 3, 5]:
+        th, tl, td = (f"target_high_{n}d", f"target_low_{n}d", f"target_dir_{n}d")
+        df  = _df[_df.index >= cutoff].dropna(subset=FEATURE_COLS + [th, tl, td])
+        X   = df[FEATURE_COLS].values
+        sp  = int(len(df) * 0.8)
+        X_tr, X_te = X[:sp], X[sp:]
+        yh  = df[th].values
+        yl  = df[tl].values
+        yd  = df[td].values.astype(int)
+
+        mh = lgb.LGBMRegressor(**lgp)
+        mh.fit(X_tr, yh[:sp], eval_set=[(X_te, yh[sp:])], callbacks=cb)
+        ml = lgb.LGBMRegressor(**lgp)
+        ml.fit(X_tr, yl[:sp], eval_set=[(X_te, yl[sp:])], callbacks=cb)
+        md = lgb.LGBMClassifier(**lgp)
+        md.fit(X_tr, yd[:sp], eval_set=[(X_te, yd[sp:])], callbacks=cb)
+
+        ph   = mh.predict(X_te)
+        pl   = ml.predict(X_te)
+        pd_  = md.predict(X_te)
+        prb  = md.predict_proba(X_te)
+        results[n] = dict(
+            mh=mh, ml=ml, md=md,
+            ph=ph, pl=pl, pd=pd_, prb=prb,
+            mae_h      = mean_absolute_error(yh[sp:], ph),
+            mae_l      = mean_absolute_error(yl[sp:], pl),
+            acc        = accuracy_score(yd[sp:], pd_),
+            n_test     = len(X_te),
+            test_start = df.index[sp].strftime("%Y/%m/%d"),
+        )
+    return results
+
+
+def predict_multiday(multiday_models: dict, df: pd.DataFrame, last_close: float) -> dict:
+    """各ホライズンの高値・安値・方向を予測"""
+    last = df[FEATURE_COLS].dropna().iloc[[-1]].values
+    out  = {}
+    for n, m in multiday_models.items():
+        ph  = float(m["mh"].predict(last)[0])
+        pl  = float(m["ml"].predict(last)[0])
+        prb = m["md"].predict_proba(last)[0]
+        out[n] = dict(
+            high_pct=ph, low_pct=pl,
+            high_yen=last_close * (1 + ph / 100),
+            low_yen =last_close * (1 + pl / 100),
+            dir=int(m["md"].predict(last)[0]),
+            prob_up=float(prb[1]), prob_down=float(prb[0]),
+        )
+    return out
+
+
+# ─────────────────────────────────────────
 # Feature 2: バイアス補正アンサンブル予測
 # ─────────────────────────────────────────
 def apply_bias_correction(pred: dict, test_info: dict, models_eval: dict,
@@ -630,6 +707,45 @@ def build_weekly_landing(df: pd.DataFrame, n_weeks: int = 12) -> pd.DataFrame:
         })
 
     return pd.DataFrame(rows)
+
+def build_next_week_pred_row(df: pd.DataFrame, last_close: float,
+                              pred_5d: dict) -> dict:
+    """翌週の予測行を生成（5日先モデルの予測値を使用）"""
+    high_pct = pred_5d["high_pct"]
+    low_pct  = pred_5d["low_pct"]
+    prob_up  = pred_5d["prob_up"]
+    expected_close_pct = (high_pct + low_pct) / 2
+    predicted_close    = last_close * (1 + expected_close_pct / 100)
+
+    last_row = df[["bb_upper", "bb_lower", "max100"]].dropna().iloc[-1]
+    bb_rng   = last_row["bb_upper"] - last_row["bb_lower"]
+    bb_pct_p = (predicted_close - last_row["bb_lower"]) / bb_rng if bb_rng > 0 else 0.5
+    dist_p   = (predicted_close / last_row["max100"] - 1) * 100
+    tag_id   = _bb_max_tag_fn(bb_pct_p, dist_p)
+    bb_label = BB_MAX_TAG_INFO.get(int(tag_id) if not pd.isna(tag_id) else 2, ("⚖️ 中立圏", ""))[0]
+
+    def _wtag(r):
+        if r > 1.5:  return "🟢 強い陽線"
+        if r > 0.3:  return "🟡 小陽線"
+        if r > -0.3: return "⚪ 横ばい"
+        if r > -1.5: return "🟠 小陰線"
+        return "🔴 強い陰線"
+
+    today = datetime.now()
+    days_to_fri = (4 - today.weekday()) % 7 or 7
+    next_fri = today + timedelta(days=days_to_fri)
+
+    return {
+        "週末(金)":  f"🔮 {next_fri.strftime('%Y/%m/%d')}（翌週予測）",
+        "始値":      f"¥{last_close:,.0f}",
+        "終値":      f"¥{predicted_close:,.0f}",
+        "高値":      f"¥{last_close*(1+high_pct/100):,.0f}",
+        "安値":      f"¥{last_close*(1+low_pct/100):,.0f}",
+        "騰落率%":   f"{expected_close_pct:+.2f}%",
+        "タグ":      _wtag(expected_close_pct) + f" ｜ {bb_label}",
+        "上昇確率":  f"{prob_up:.1%}",
+    }
+
 
 # ─────────────────────────────────────────
 # Feature 4: イベントカレンダー (upcoming)
@@ -1018,6 +1134,10 @@ with st.spinner(f"直近{train_years}年データで LightGBM / SVR / ランダ�
 with st.spinner("LSTM を学習中...（初回のみ時間がかかります）"):
     lstm_result, lstm_test_info = train_lstm(ck, df, train_years)
 
+with st.spinner("多日先モデル (2日/3日/5日先 LightGBM) を学習中..."):
+    multiday_models = train_multiday_models(ck, df, train_years)
+multiday_preds = predict_multiday(multiday_models, df, last_close)
+
 # ── アンサンブル評価（sklearn 3モデル平均）──
 ens_eval = ensemble_test_metrics(sklearn_models, test_info)
 
@@ -1043,12 +1163,13 @@ dist_from_max100_last = df["dist_from_max100"].dropna().iloc[-1] if "dist_from_m
 # ─────────────────────────────────────────
 # タブ (10つ)
 # ─────────────────────────────────────────
-(tab_dash, tab_dir, tab_hl, tab_week, tab_lgb, tab_svr, tab_rf,
- tab_ens, tab_lstm, tab_bb) = st.tabs([
+(tab_dash, tab_dir, tab_hl, tab_week, tab_multi,
+ tab_lgb, tab_svr, tab_rf, tab_ens, tab_lstm, tab_bb) = st.tabs([
     "🏠 ダッシュボード",
     "🔍 過去10日（方向性）",
     "📈 過去10日（高値/安値）",
     "📅 週着地",
+    "🔮 多日先予測",
     "🤖 LightGBM",
     "📐 SVR",
     "🌲 ランダムフォレスト",
@@ -1451,7 +1572,13 @@ with tab_week:
     if weekly_df.empty:
         st.warning("週次データを生成できませんでした。データ量を確認してください。")
     else:
-        st.dataframe(weekly_df, use_container_width=True, hide_index=True)
+        # 翌週予測行を先頭に追加
+        pred_row_df = pd.DataFrame([build_next_week_pred_row(df, last_close, multiday_preds[5])])
+        # 週着地テーブルに "上昇確率" 列がない場合は追加（既存行は空欄）
+        if "上昇確率" not in weekly_df.columns:
+            weekly_df["上昇確率"] = "─"
+        display_df = pd.concat([pred_row_df, weekly_df], ignore_index=True)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.markdown("#### 週次騰落率ヒストグラム（直近24週）")
@@ -1483,6 +1610,92 @@ with tab_week:
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
         )
         st.plotly_chart(fig_wk, use_container_width=True)
+
+# ════════════════════════════════════════
+# ── 多日先予測タブ ──
+# ════════════════════════════════════════
+with tab_multi:
+    st.subheader("🔮 多日先予測（N日先 LightGBM）")
+    st.caption(
+        "D+1はアンサンブル予測、D+2/D+3/D+5はそれぞれ独立した LightGBM モデルで学習。"
+        "⚠️ 日数が伸びるほど誤差が大きくなります。"
+    )
+
+    # ── 予測レンジ チャート ──
+    horizons_all = {
+        "D+1 (翌日)":   ensemble_pred,
+        "D+2 (2日後)":  multiday_preds[2],
+        "D+3 (3日後)":  multiday_preds[3],
+        "D+5 (翌週)":   multiday_preds[5],
+    }
+    fig_multi = go.Figure()
+    labels = list(horizons_all.keys())
+    high_deltas = [p["high_yen"] - last_close for p in horizons_all.values()]
+    low_deltas  = [p["low_yen"]  - last_close for p in horizons_all.values()]
+    high_yens   = [p["high_yen"] for p in horizons_all.values()]
+    low_yens    = [p["low_yen"]  for p in horizons_all.values()]
+
+    fig_multi.add_trace(go.Bar(
+        name="予測 高値（前日比）", x=labels, y=high_deltas,
+        marker_color="#EF5350",
+        text=[f"+¥{v:,.0f}<br>(¥{y:,.0f})" for v, y in zip(high_deltas, high_yens)],
+        textposition="outside",
+    ))
+    fig_multi.add_trace(go.Bar(
+        name="予測 安値（前日比）", x=labels, y=low_deltas,
+        marker_color="#26A69A",
+        text=[f"¥{v:,.0f}<br>(¥{y:,.0f})" for v, y in zip(low_deltas, low_yens)],
+        textposition="outside",
+    ))
+    fig_multi.add_hline(y=0, line_color="white", line_dash="dot", line_width=1.5,
+                        annotation_text=f"基準 ¥{last_close:,.0f}",
+                        annotation_position="top right")
+    fig_multi.update_layout(
+        barmode="group", yaxis_title="前日終値比 (円)",
+        yaxis=dict(tickformat="+,.0f", zeroline=True, zerolinecolor="white"),
+        height=420, margin=dict(l=8, r=8, t=20, b=8),
+        legend=dict(orientation="h", y=-0.2),
+        plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
+    )
+    st.plotly_chart(fig_multi, use_container_width=True)
+
+    st.divider()
+
+    # ── 予測まとめテーブル ──
+    st.markdown("#### 予測まとめ")
+    multi_rows = []
+    for label, p in horizons_all.items():
+        dir_label = "上昇 ↑" if p["dir"] == 1 else "下落 ↓"
+        multi_rows.append({
+            "ホライズン":  label,
+            "予測 高値":   f"¥{p['high_yen']:,.0f}  ({p['high_pct']:+.2f}%)",
+            "予測 安値":   f"¥{p['low_yen']:,.0f}  ({p['low_pct']:+.2f}%)",
+            "終値方向":    dir_label,
+            "上昇確率":    f"{p['prob_up']:.1%}",
+        })
+    st.dataframe(pd.DataFrame(multi_rows).set_index("ホライズン"),
+                 use_container_width=True)
+
+    st.divider()
+
+    # ── モデル精度 ──
+    st.markdown("#### モデル精度（テストセット）")
+    acc_rows = []
+    for n, m in multiday_models.items():
+        acc_rows.append({
+            "ホライズン":       f"D+{n}",
+            "高値MAE":         f"{m['mae_h']:.3f}%",
+            "安値MAE":         f"{m['mae_l']:.3f}%",
+            "方向性正解率":     f"{m['acc']:.1%}",
+            "テスト開始":       m["test_start"],
+            "テスト件数":       m["n_test"],
+        })
+    st.dataframe(pd.DataFrame(acc_rows).set_index("ホライズン"),
+                 use_container_width=True)
+    st.caption(
+        "※ N日先モデルは「N日間の最高値・最安値・N日後終値」を独立したターゲットとして学習。"
+        "日数が増えるほど不確実性が高まるため MAE が大きくなるのは正常です。"
+    )
 
 st.markdown("---")
 st.caption("免責事項: このアプリはデモ・教育目的のみです。投資判断には使用しないでください。")
