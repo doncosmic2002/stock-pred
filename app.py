@@ -56,6 +56,14 @@ st.markdown("""
 <style>
 .stMetric { text-align: center; }
 @media (max-width: 600px) { .block-container { padding: 1rem 0.5rem; } }
+
+/* ── スマホ スクロール干渉防止 ── */
+* { touch-action: manipulation; }
+.js-plotly-plot,
+.js-plotly-plot .plotly,
+.js-plotly-plot .main-svg,
+.stPlotlyChart { touch-action: pan-y !important; }
+input, select, textarea { font-size: 16px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1309,7 +1317,7 @@ with tab_dash:
         legend=dict(orientation="h", y=-0.2),
         plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
     )
-    st.plotly_chart(fig_dash, use_container_width=True)
+    st.plotly_chart(fig_dash, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
 
     st.divider()
 
@@ -1448,7 +1456,7 @@ with tab_bb:
                 )
         st.divider()
 
-    st.plotly_chart(plot_bollinger(df), use_container_width=True)
+    st.plotly_chart(plot_bollinger(df), use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
 
     with st.expander("直近10日 数値データ"):
         dcols = ["open","high","low","close","bb_upper","bb_mid","bb_lower",
@@ -1491,7 +1499,7 @@ with tab_dir:
         if lp:
             acc_data["LSTM"] = accuracy_score(la, lp)
 
-    st.plotly_chart(plot_accuracy_bar(acc_data), use_container_width=True)
+    st.plotly_chart(plot_accuracy_bar(acc_data), use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
     st.info(
         "**方向性正解率の見方**\n\n"
         "- **50%** = ランダムと同等（コイントスと変わらない）\n"
@@ -1527,10 +1535,12 @@ with tab_hl:
     s1, s2 = st.columns(2)
     with s1:
         st.plotly_chart(plot_scatter_pct(test_info, all_eval, "high"),
-                        use_container_width=True)
+                        use_container_width=True,
+                        config={"scrollZoom": False, "displayModeBar": False})
     with s2:
         st.plotly_chart(plot_scatter_pct(test_info, all_eval, "low"),
-                        use_container_width=True)
+                        use_container_width=True,
+                        config={"scrollZoom": False, "displayModeBar": False})
 
     st.markdown("---")
     st.markdown("#### モデル精度比較（テスト全期間）")
@@ -1609,7 +1619,7 @@ with tab_week:
             height=350, margin=dict(l=8, r=8, t=20, b=8),
             plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
         )
-        st.plotly_chart(fig_wk, use_container_width=True)
+        st.plotly_chart(fig_wk, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
 
 # ════════════════════════════════════════
 # ── 多日先予測タブ ──
@@ -1657,7 +1667,7 @@ with tab_multi:
         legend=dict(orientation="h", y=-0.2),
         plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
     )
-    st.plotly_chart(fig_multi, use_container_width=True)
+    st.plotly_chart(fig_multi, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
 
     st.divider()
 
