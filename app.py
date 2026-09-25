@@ -1080,11 +1080,19 @@ def calc_hit_rate_summary(models_eval: dict, test_info: dict,
 # ─────────────────────────────────────────
 # メインUI
 # ─────────────────────────────────────────
-st.title("📈 日経平均 翌日予測")
-st.caption(
-    f"データ: Yahoo Finance　|　モデル: LightGBM / SVR / RF / アンサンブル / LSTM"
-    f"　|　更新: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
-)
+_title_col, _btn_col = st.columns([5, 1])
+with _title_col:
+    st.title("📈 日経平均 翌日予測")
+    st.caption(
+        f"データ: Yahoo Finance　|　モデル: LightGBM / SVR / RF / アンサンブル / LSTM"
+        f"　|　更新: {datetime.now().strftime('%Y/%m/%d %H:%M')}"
+    )
+with _btn_col:
+    st.markdown("<div style='margin-top:18px'>", unsafe_allow_html=True)
+    if st.button("🔄 更新", use_container_width=True, help="最新データに更新（キャッシュクリア）"):
+        st.cache_data.clear()
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ── サイドバー ──
 with st.sidebar:
