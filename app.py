@@ -1408,7 +1408,7 @@ with tab_dash:
         legend=dict(orientation="h", y=-0.2),
         plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
     )
-    st.plotly_chart(fig_dash, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
+    st.plotly_chart(fig_dash, use_container_width=True, config={"scrollZoom": False, "displayModeBar": False, "staticPlot": True})
 
     st.divider()
 
