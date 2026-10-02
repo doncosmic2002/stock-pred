@@ -285,9 +285,11 @@ def build_features(_dfs: dict, cache_key: str) -> pd.DataFrame:
     next_high  = nk["high"].shift(-1)
     next_low   = nk["low"].shift(-1)
     next_close = c.shift(-1)
+    next_open  = nk["open"].shift(-1)
     nk["target_high_pct"] = (next_high  / c - 1) * 100
     nk["target_low_pct"]  = (next_low   / c - 1) * 100
     nk["target_dir"]      = (next_close > c).astype(int)
+    nk["target_open_pct"] = (next_open  / c - 1) * 100
 
     # # ── 多日先ターゲット（2日・3日・5日）──
     # h_arr  = nk["high"].values
@@ -381,6 +383,33 @@ def train_sklearn_models(cache_key: str, _df: pd.DataFrame, years: int):
         n_test     = n - sp,
     )
     return models, test_info
+
+# ─────────────────────────────────────────
+# 翌日始値 LightGBM 学習
+# ─────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def train_open_model(cache_key: str, _df: pd.DataFrame, years: int):
+    cutoff = _df.index[-1] - pd.DateOffset(years=years)
+    df = _df[_df.index >= cutoff].dropna(subset=FEATURE_COLS + ["target_open_pct"])
+    X  = df[FEATURE_COLS].values
+    yo = df["target_open_pct"].values
+    n  = len(df)
+    sp = int(n * 0.8)
+    X_tr, X_te = X[:sp], X[sp:]
+    cb  = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(-1)]
+    lgp = dict(n_estimators=500, learning_rate=0.03, num_leaves=31,
+               feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=5,
+               random_state=42, n_jobs=-1, verbose=-1)
+    mo = lgb.LGBMRegressor(**lgp)
+    mo.fit(X_tr, yo[:sp], eval_set=[(X_te, yo[sp:])], callbacks=cb)
+    po = mo.predict(X_te)
+    return dict(
+        mo=mo,
+        po=po,
+        mae_o=mean_absolute_error(yo[sp:], po),
+        test_start=df.index[sp].strftime("%Y/%m/%d"),
+        n_test=len(X_te),
+    )
 
 # # ─────────────────────────────────────────
 # # LSTM 学習
@@ -1165,6 +1194,9 @@ ck = df["close"].dropna().index[-1].strftime("%Y%m%d") + f"_y{train_years}"
 with st.spinner(f"直近{train_years}年データで LightGBM / SVR / ランダムフォレスト を学習中..."):
     sklearn_models, test_info = train_sklearn_models(ck, df, train_years)
 
+with st.spinner("翌日始値モデル (LightGBM) を学習中..."):
+    open_model = train_open_model(ck, df, train_years)
+
 # with st.spinner("LSTM を学習中...（初回のみ時間がかかります）"):
 #     lstm_result, lstm_test_info = train_lstm(ck, df, train_years)
 lstm_result, lstm_test_info = None, None
@@ -1186,6 +1218,11 @@ lstm_pred      = None
 all_pred_list  = list(sklearn_preds.values())
 ensemble_pred  = build_ensemble_pred(all_pred_list, last_close)
 
+# ── 翌日始値予測（LightGBM）──
+_last_feat   = df[FEATURE_COLS].dropna().iloc[[-1]].values
+open_pct_pred = float(open_model["mo"].predict(_last_feat)[0])
+open_yen_pred = last_close * (1 + open_pct_pred / 100)
+
 # ── Feature 2: バイアス補正予測 ──
 bias_corrected = apply_bias_correction(ensemble_pred, test_info, sklearn_models, last_close)
 
@@ -1199,8 +1236,9 @@ dist_from_max100_last = df["dist_from_max100"].dropna().iloc[-1] if "dist_from_m
 # ─────────────────────────────────────────
 # タブ (10つ)
 # ─────────────────────────────────────────
-(tab_dash, tab_hl, tab_dir, tab_week) = st.tabs([
+(tab_dash, tab_today, tab_hl, tab_dir, tab_week) = st.tabs([
     "🏠 ダッシュボード",
+    "📊 当日/翌日予測",
     "📈 過去10日（高値/安値）",
     "🔍 過去10日（方向性）",
     "📅 週着地",
@@ -1458,6 +1496,68 @@ with tab_dash:
             st.markdown(f"**{mname}**")
             st.markdown(f"{color} 上昇 `{p['prob_up']:.1%}`")
             st.progress(p["prob_up"])
+
+
+# ════════════════════════════════════════
+# ── 当日/翌日予測タブ ──
+# ════════════════════════════════════════
+with tab_today:
+    st.subheader("📊 当日実績 ＋ 翌日 LightGBM 予測")
+
+    # ── 当日実績（直近確定データ）──
+    today_row = df[["open", "high", "low", "close"]].dropna().iloc[-1]
+    today_date = df[["open", "high", "low", "close"]].dropna().index[-1].strftime("%Y/%m/%d")
+
+    st.markdown(f"#### 当日実績　（{today_date}）")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("始値", f"¥{today_row['open']:,.0f}")
+    with c2:
+        st.metric("🔺 高値 (Max)", f"¥{today_row['high']:,.0f}",
+                  delta=f"{(today_row['high']/today_row['open']-1)*100:+.2f}%")
+    with c3:
+        st.metric("🔻 安値 (Min)", f"¥{today_row['low']:,.0f}",
+                  delta=f"{(today_row['low']/today_row['open']-1)*100:+.2f}%")
+    with c4:
+        st.metric("終値（基準）", f"¥{last_close:,.0f}",
+                  delta=f"{(last_close/today_row['open']-1)*100:+.2f}%")
+
+    st.divider()
+
+    # ── 翌日 LightGBM 予測 ──
+    lgb_pred = sklearn_preds["LightGBM"]
+    lgb_model = sklearn_models["LightGBM"]
+
+    st.markdown(f"#### 翌日予測　（LightGBM / 基準: 終値 ¥{last_close:,.0f}）")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        st.metric("🔮 始値予測",
+                  f"¥{open_yen_pred:,.0f}",
+                  delta=f"{open_pct_pred:+.2f}%")
+    with p2:
+        st.metric("🔺 高値予測 (Max)",
+                  f"¥{lgb_pred['high_yen']:,.0f}",
+                  delta=f"{lgb_pred['high_pct']:+.2f}%")
+    with p3:
+        st.metric("🔻 安値予測 (Min)",
+                  f"¥{lgb_pred['low_yen']:,.0f}",
+                  delta=f"{lgb_pred['low_pct']:+.2f}%")
+
+    st.divider()
+
+    # ── モデル精度（MAE）──
+    st.markdown(f"#### モデル精度　（テスト期間: {open_model['test_start']} ～ 直近 / {open_model['n_test']}営業日）")
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("始値 MAE", f"{open_model['mae_o']:.3f}%",
+                  help="始値予測の平均絶対誤差")
+    with m2:
+        st.metric("高値 MAE", f"{lgb_model['mae_h']:.3f}%",
+                  help="高値予測の平均絶対誤差")
+    with m3:
+        st.metric("安値 MAE", f"{lgb_model['mae_l']:.3f}%",
+                  help="安値予測の平均絶対誤差")
+    st.caption("※ MAEは小さいほど誤差が少ない　｜　時系列分割（前80%学習 / 後20%テスト）")
 
 
 # # ════════════════════════════════════════
