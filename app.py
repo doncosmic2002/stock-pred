@@ -1199,17 +1199,11 @@ dist_from_max100_last = df["dist_from_max100"].dropna().iloc[-1] if "dist_from_m
 # ─────────────────────────────────────────
 # タブ (10つ)
 # ─────────────────────────────────────────
-(tab_dash, tab_hl, tab_dir, tab_week,
- tab_lgb, tab_svr, tab_rf, tab_ens, tab_bb) = st.tabs([
+(tab_dash, tab_hl, tab_dir, tab_week) = st.tabs([
     "🏠 ダッシュボード",
     "📈 過去10日（高値/安値）",
     "🔍 過去10日（方向性）",
     "📅 週着地",
-    "🤖 LightGBM",
-    "📐 SVR",
-    "🌲 ランダムフォレスト",
-    "🔗 アンサンブル",
-    "📊 ボリンジャーバンド",
 ])
 
 # ════════════════════════════════════════
@@ -1333,27 +1327,41 @@ with tab_dash:
     model_names = list(all_tomorrow.keys())
 
     st.markdown(f"#### 予測一覧テーブル　（{pred_date.strftime('%m/%d')} / {_hlabel}）")
+    # 精度データを辞書化（モデル名→mae_h, mae_l, acc）
+    _accuracy_map = {}
+    for mname, m in sklearn_models.items():
+        _accuracy_map[mname] = (m["mae_h"], m["mae_l"], m["acc"])
+    _accuracy_map["アンサンブル"] = (ens_eval["mae_h"], ens_eval["mae_l"], ens_eval["acc"])
+
     summary_rows = []
     for mname, p in all_tomorrow.items():
         dir_label = "上昇 ↑" if p["dir"] == 1 else "下落 ↓"
         dprob = p["prob_up"] if p["dir"] == 1 else p["prob_down"]
-        summary_rows.append({
-            "モデル":    mname,
-            "予測 高値":  f"¥{p['high_yen']:,.0f}  ({p['high_pct']:+.2f}%)",
-            "予測 安値":  f"¥{p['low_yen']:,.0f}  ({p['low_pct']:+.2f}%)",
-            "終値方向":   dir_label,
-            "上昇確率":   f"{dprob:.1%}",
-        })
+        mae_h, mae_l, acc = _accuracy_map.get(mname, (None, None, None))
+        row = {
+            "モデル":      mname,
+            "予測 高値":   f"¥{p['high_yen']:,.0f}  ({p['high_pct']:+.2f}%)",
+            "予測 安値":   f"¥{p['low_yen']:,.0f}  ({p['low_pct']:+.2f}%)",
+            "終値方向":    dir_label,
+            "上昇確率":    f"{dprob:.1%}",
+            "高値MAE":     f"{mae_h:.3f}%" if mae_h is not None else "─",
+            "安値MAE":     f"{mae_l:.3f}%" if mae_l is not None else "─",
+            "方向正解率":  f"{acc:.1%}"    if acc  is not None else "─",
+        }
+        summary_rows.append(row)
     # D+1 のときのみバイアス補正行を追加
     if _n_bdays <= 1:
         bc_dir = "上昇 ↑" if bias_corrected["dir"] == 1 else "下落 ↓"
         bc_prob = bias_corrected["prob_up"] if bias_corrected["dir"] == 1 else bias_corrected["prob_down"]
         summary_rows.append({
-            "モデル":    "🎯 バイアス補正アンサンブル",
-            "予測 高値":  f"¥{bias_corrected['high_yen']:,.0f}  ({bias_corrected['high_pct']:+.2f}%)",
-            "予測 安値":  f"¥{bias_corrected['low_yen']:,.0f}  ({bias_corrected['low_pct']:+.2f}%)",
-            "終値方向":   bc_dir,
-            "上昇確率":   f"{bc_prob:.1%}",
+            "モデル":      "🎯 バイアス補正アンサンブル",
+            "予測 高値":   f"¥{bias_corrected['high_yen']:,.0f}  ({bias_corrected['high_pct']:+.2f}%)",
+            "予測 安値":   f"¥{bias_corrected['low_yen']:,.0f}  ({bias_corrected['low_pct']:+.2f}%)",
+            "終値方向":    bc_dir,
+            "上昇確率":    f"{bc_prob:.1%}",
+            "高値MAE":     "─",
+            "安値MAE":     "─",
+            "方向正解率":  "─",
         })
     st.dataframe(
         pd.DataFrame(summary_rows).set_index("モデル"),
@@ -1452,31 +1460,31 @@ with tab_dash:
             st.progress(p["prob_up"])
 
 
-# ════════════════════════════════════════
-# ── 各モデルタブ ──
-# ════════════════════════════════════════
-for tab, name, pred in [
-    (tab_lgb, "LightGBM",       sklearn_preds["LightGBM"]),
-    (tab_svr, "SVR",             sklearn_preds["SVR"]),
-    (tab_rf,  "ランダムフォレスト", sklearn_preds["ランダムフォレスト"]),
-]:
-    with tab:
-        m = sklearn_models[name]
-        render_pred_tab(name, pred, last_close,
-                        m["mae_h"], m["mae_l"], m["acc"],
-                        test_info["test_start"], test_info["n_test"])
-
-# ── アンサンブルタブ ──
-with tab_ens:
-    n_models = len(all_pred_list)
-    render_pred_tab(
-        f"アンサンブル（{n_models}モデル平均）",
-        ensemble_pred, last_close,
-        ens_eval["mae_h"], ens_eval["mae_l"], ens_eval["acc"],
-        test_info["test_start"], test_info["n_test"],
-    )
-    st.caption(f"テスト評価: LightGBM / SVR / ランダムフォレスト の3モデル平均　"
-               f"| 翌日予測: {n_models}モデル平均")
+# # ════════════════════════════════════════
+# # ── 各モデルタブ ──
+# # ════════════════════════════════════════
+# for tab, name, pred in [
+#     (tab_lgb, "LightGBM",       sklearn_preds["LightGBM"]),
+#     (tab_svr, "SVR",             sklearn_preds["SVR"]),
+#     (tab_rf,  "ランダムフォレスト", sklearn_preds["ランダムフォレスト"]),
+# ]:
+#     with tab:
+#         m = sklearn_models[name]
+#         render_pred_tab(name, pred, last_close,
+#                         m["mae_h"], m["mae_l"], m["acc"],
+#                         test_info["test_start"], test_info["n_test"])
+#
+# # ── アンサンブルタブ ──
+# with tab_ens:
+#     n_models = len(all_pred_list)
+#     render_pred_tab(
+#         f"アンサンブル（{n_models}モデル平均）",
+#         ensemble_pred, last_close,
+#         ens_eval["mae_h"], ens_eval["mae_l"], ens_eval["acc"],
+#         test_info["test_start"], test_info["n_test"],
+#     )
+#     st.caption(f"テスト評価: LightGBM / SVR / ランダムフォレスト の3モデル平均　"
+#                f"| 翌日予測: {n_models}モデル平均")
 
 # # ── LSTM タブ ──
 # with tab_lstm:
@@ -1492,45 +1500,39 @@ with tab_ens:
 #             lstm_test_info["test_start"], lstm_test_info["n_test"],
 #         )
 
-# ════════════════════════════════════════
-# ── ボリンジャーバンドタブ ──
-# ════════════════════════════════════════
-with tab_bb:
-    st.subheader("ボリンジャーバンド（直近30営業日）")
-
-    # Feature 6: bb_max_tag 表示
-    if not pd.isna(bb_max_tag_last):
-        tag_key  = int(bb_max_tag_last)
-        tag_name, tag_desc = BB_MAX_TAG_INFO.get(tag_key, ("不明", ""))
-        col_t1, col_t2, col_t3 = st.columns(3)
-        with col_t1:
-            st.markdown("**現在のボリバンタグ (bb_max_tag)**")
-            st.markdown(f"## {tag_name}")
-            st.caption(tag_desc)
-        with col_t2:
-            st.metric("bb_max_tag 番号", f"{tag_key}")
-        with col_t3:
-            if not pd.isna(dist_from_max100_last):
-                st.metric(
-                    "100日高値からの乖離 (dist_from_max100)",
-                    f"{dist_from_max100_last:.2f}%",
-                    help="0%=直近100日高値と同水準、負=それ以下"
-                )
-        st.divider()
-
-    st.plotly_chart(plot_bollinger(df), use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
-
-    with st.expander("直近10日 数値データ"):
-        dcols = ["open","high","low","close","bb_upper","bb_mid","bb_lower",
-                 "rsi14","atr_pct","dist_from_max100","bb_max_tag"]
-        available_cols = [c for c in dcols if c in df.columns]
-        st.dataframe(df[available_cols].tail(10).round(2), use_container_width=True)
-
-    # BB_MAX_TAG_INFO 凡例
-    with st.expander("ボリバンタグ (bb_max_tag) 凡例"):
-        tag_rows = [{"タグ番号": k, "名称": v[0], "説明": v[1]}
-                    for k, v in sorted(BB_MAX_TAG_INFO.items(), reverse=True)]
-        st.dataframe(pd.DataFrame(tag_rows), use_container_width=True, hide_index=True)
+# # ════════════════════════════════════════
+# # ── ボリンジャーバンドタブ ──
+# # ════════════════════════════════════════
+# with tab_bb:
+#     st.subheader("ボリンジャーバンド（直近30営業日）")
+#     if not pd.isna(bb_max_tag_last):
+#         tag_key  = int(bb_max_tag_last)
+#         tag_name, tag_desc = BB_MAX_TAG_INFO.get(tag_key, ("不明", ""))
+#         col_t1, col_t2, col_t3 = st.columns(3)
+#         with col_t1:
+#             st.markdown("**現在のボリバンタグ (bb_max_tag)**")
+#             st.markdown(f"## {tag_name}")
+#             st.caption(tag_desc)
+#         with col_t2:
+#             st.metric("bb_max_tag 番号", f"{tag_key}")
+#         with col_t3:
+#             if not pd.isna(dist_from_max100_last):
+#                 st.metric(
+#                     "100日高値からの乖離 (dist_from_max100)",
+#                     f"{dist_from_max100_last:.2f}%",
+#                     help="0%=直近100日高値と同水準、負=それ以下"
+#                 )
+#         st.divider()
+#     st.plotly_chart(plot_bollinger(df), use_container_width=True, config={"scrollZoom": False, "displayModeBar": False})
+#     with st.expander("直近10日 数値データ"):
+#         dcols = ["open","high","low","close","bb_upper","bb_mid","bb_lower",
+#                  "rsi14","atr_pct","dist_from_max100","bb_max_tag"]
+#         available_cols = [c for c in dcols if c in df.columns]
+#         st.dataframe(df[available_cols].tail(10).round(2), use_container_width=True)
+#     with st.expander("ボリバンタグ (bb_max_tag) 凡例"):
+#         tag_rows = [{"タグ番号": k, "名称": v[0], "説明": v[1]}
+#                     for k, v in sorted(BB_MAX_TAG_INFO.items(), reverse=True)]
+#         st.dataframe(pd.DataFrame(tag_rows), use_container_width=True, hide_index=True)
 
 # ════════════════════════════════════════
 # ── 過去10日（方向性）タブ ──
