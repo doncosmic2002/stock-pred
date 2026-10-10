@@ -1531,18 +1531,22 @@ with tab_today:
         _compare_rows = []
         for _mname, _m in sklearn_models.items():
             _p = sklearn_preds[_mname]
-            _high_diff = today_row["high"] - _p["high_yen"]
-            _low_diff  = today_row["low"]  - _p["low_yen"]
-            _close_diff = last_close - _prev_close * (1 + (_p["high_pct"] + _p["low_pct"]) / 2 / 100)
+            _close_pred_m = _prev_close * (1 + (_p["high_pct"] + _p["low_pct"]) / 2 / 100)
+            _close_diff   = last_close - _close_pred_m
             _compare_rows.append({
-                "モデル":       _mname,
-                "高値予測":     f"¥{_p['high_yen']:,.0f}",
-                "高値実績":     f"¥{today_row['high']:,.0f}",
-                "高値誤差":     f"{_high_diff:+,.0f}円",
-                "安値予測":     f"¥{_p['low_yen']:,.0f}",
-                "安値実績":     f"¥{today_row['low']:,.0f}",
-                "安値誤差":     f"{_low_diff:+,.0f}円",
+                "モデル":     _mname,
+                "終値 予測":  f"¥{_close_pred_m:,.0f}",
+                "終値 実績":  f"¥{last_close:,.0f}",
+                "誤差":       f"{_close_diff:+,.0f}円",
             })
+        # アンサンブル行も追加
+        _close_diff_ens = last_close - _close_pred_yen
+        _compare_rows.append({
+            "モデル":     "アンサンブル",
+            "終値 予測":  f"¥{_close_pred_yen:,.0f}",
+            "終値 実績":  f"¥{last_close:,.0f}",
+            "誤差":       f"{_close_diff_ens:+,.0f}円",
+        })
         st.dataframe(pd.DataFrame(_compare_rows).set_index("モデル"), use_container_width=True)
         st.caption(f"※ 現在時刻 (JST): {_now_jst_t.strftime('%H:%M')}　市場クローズ後の確定値")
 
