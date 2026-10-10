@@ -1557,7 +1557,7 @@ with tab_today:
             "誤差":      f"{_diff_today:+,.0f}円",
         })
     if _hist_rows:
-        st.dataframe(pd.DataFrame(_hist_rows).set_index("日付"), use_container_width=True)
+        st.dataframe(pd.DataFrame(_hist_rows[::-1]).set_index("日付"), use_container_width=True)
     st.caption("※ 終値予測 = LightGBMの高値・安値予測の中間値　｜　誤差 = 実績 − 予測")
 
     st.divider()
