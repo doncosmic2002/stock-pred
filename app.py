@@ -1502,11 +1502,9 @@ with tab_today:
     _prev_close_row = df["close"].dropna()
     _prev_close = float(_prev_close_row.iloc[-2]) if len(_prev_close_row) >= 2 else float(_prev_close_row.iloc[-1])
 
-    # 当日の終値予測（アンサンブル）= 前日終値基準
-    _close_pred_yen = _prev_close * (1 + ensemble_pred["high_pct"] / 100 * 0.5
-                                      + ensemble_pred["low_pct"]  / 100 * 0.5)
-    # 終値予測は高値・安値の中間値（簡易推定）
-    _close_pred_yen = _prev_close * (1 + (ensemble_pred["high_pct"] + ensemble_pred["low_pct"]) / 2 / 100)
+    # 当日の終値予測（LightGBM 高値・安値の中間値）
+    _lgb_p          = sklearn_preds["LightGBM"]
+    _close_pred_yen = _prev_close * (1 + (_lgb_p["high_pct"] + _lgb_p["low_pct"]) / 2 / 100)
     _close_pred_pct = (_close_pred_yen / _prev_close - 1) * 100
 
     st.markdown(f"#### 当日　（{today_date}）")
@@ -1520,35 +1518,47 @@ with tab_today:
         st.metric("🔻 安値", f"¥{today_row['low']:,.0f}",
                   delta=f"{(today_row['low']/today_row['open']-1)*100:+.2f}%")
     with c4:
-        st.metric("終値 予測", f"¥{_close_pred_yen:,.0f}",
+        st.metric("終値 予測 (LGB)", f"¥{_close_pred_yen:,.0f}",
                   delta=f"{_close_pred_pct:+.2f}%",
-                  help="アンサンブル（高値・安値予測の中間値）")
+                  help="LightGBM（高値・安値予測の中間値）")
 
-    # ── 15時以降：予測 vs 実績 比較 ──
-    if _after_15:
-        st.divider()
-        st.markdown("#### 📋 予測 vs 実績 比較　（本日確定）")
-        _compare_rows = []
-        for _mname, _m in sklearn_models.items():
-            _p = sklearn_preds[_mname]
-            _close_pred_m = _prev_close * (1 + (_p["high_pct"] + _p["low_pct"]) / 2 / 100)
-            _close_diff   = last_close - _close_pred_m
-            _compare_rows.append({
-                "モデル":     _mname,
-                "終値 予測":  f"¥{_close_pred_m:,.0f}",
-                "終値 実績":  f"¥{last_close:,.0f}",
-                "誤差":       f"{_close_diff:+,.0f}円",
-            })
-        # アンサンブル行も追加
-        _close_diff_ens = last_close - _close_pred_yen
-        _compare_rows.append({
-            "モデル":     "アンサンブル",
-            "終値 予測":  f"¥{_close_pred_yen:,.0f}",
-            "終値 実績":  f"¥{last_close:,.0f}",
-            "誤差":       f"{_close_diff_ens:+,.0f}円",
+    # ── 過去5日 予測 vs 実績 比較（LightGBM）──
+    st.divider()
+    st.markdown("#### 📋 終値 予測 vs 実績　過去5日（LightGBM）")
+    _lgb_m    = sklearn_models["LightGBM"]
+    _n        = test_info["n_test"]
+    _dates5   = test_info["dates"][max(0, _n - 5):]
+    _ph5      = _lgb_m["ph"][max(0, _n - 5):]
+    _pl5      = _lgb_m["pl"][max(0, _n - 5):]
+    _close_ser = df["close"].dropna()
+    _hist_rows = []
+    for _i, _dt in enumerate(_dates5):
+        # その日の前日終値を取得
+        _dt_idx = _close_ser.index.get_loc(_dt) if _dt in _close_ser.index else None
+        if _dt_idx is None or _dt_idx == 0:
+            continue
+        _base_c   = float(_close_ser.iloc[_dt_idx - 1])
+        _pred_c   = _base_c * (1 + (_ph5[_i] + _pl5[_i]) / 2 / 100)
+        _actual_c = float(_close_ser.iloc[_dt_idx])
+        _diff     = _actual_c - _pred_c
+        _hist_rows.append({
+            "日付":      _dt.strftime("%m/%d(%a)"),
+            "終値 予測": f"¥{_pred_c:,.0f}",
+            "終値 実績": f"¥{_actual_c:,.0f}",
+            "誤差":      f"{_diff:+,.0f}円",
         })
-        st.dataframe(pd.DataFrame(_compare_rows).set_index("モデル"), use_container_width=True)
-        st.caption(f"※ 現在時刻 (JST): {_now_jst_t.strftime('%H:%M')}　市場クローズ後の確定値")
+    # 15時以降は当日行も追加
+    if _after_15:
+        _diff_today = last_close - _close_pred_yen
+        _hist_rows.append({
+            "日付":      f"📍 {today_date}（本日）",
+            "終値 予測": f"¥{_close_pred_yen:,.0f}",
+            "終値 実績": f"¥{last_close:,.0f}",
+            "誤差":      f"{_diff_today:+,.0f}円",
+        })
+    if _hist_rows:
+        st.dataframe(pd.DataFrame(_hist_rows).set_index("日付"), use_container_width=True)
+    st.caption("※ 終値予測 = LightGBMの高値・安値予測の中間値　｜　誤差 = 実績 − 予測")
 
     st.divider()
 
