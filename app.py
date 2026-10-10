@@ -1467,13 +1467,13 @@ with tab_dash:
     sh_bc = "+" if bias_corrected["high_pct"] >= 0 else ""
     sl_bc = "+" if bias_corrected["low_pct"]  >= 0 else ""
     with bc1:
-        st.metric("🔺 補正後 高値乖離率",
-                  f"{sh_bc}{bias_corrected['high_pct']:.2f}%",
-                  delta=f"参考 ¥{bias_corrected['high_yen']:,.0f}")
+        st.metric("🔺 補正後 高値",
+                  f"¥{bias_corrected['high_yen']:,.0f}",
+                  delta=f"{sh_bc}{bias_corrected['high_pct']:.2f}%")
     with bc2:
-        st.metric("🔻 補正後 安値乖離率",
-                  f"{sl_bc}{bias_corrected['low_pct']:.2f}%",
-                  delta=f"参考 ¥{bias_corrected['low_yen']:,.0f}")
+        st.metric("🔻 補正後 安値",
+                  f"¥{bias_corrected['low_yen']:,.0f}",
+                  delta=f"{sl_bc}{bias_corrected['low_pct']:.2f}%")
     sh_bias = "+" if bias_corrected["bias_h"] >= 0 else ""
     sl_bias = "+" if bias_corrected["bias_l"] >= 0 else ""
     with bc3:
