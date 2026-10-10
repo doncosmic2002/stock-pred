@@ -1510,7 +1510,7 @@ with tab_today:
     _close_pred_pct = (_close_pred_yen / _prev_close - 1) * 100
 
     st.markdown(f"#### 当日　（{today_date}）")
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("始値", f"¥{today_row['open']:,.0f}")
     with c2:
@@ -1520,10 +1520,6 @@ with tab_today:
         st.metric("🔻 安値", f"¥{today_row['low']:,.0f}",
                   delta=f"{(today_row['low']/today_row['open']-1)*100:+.2f}%")
     with c4:
-        st.metric("終値 実績", f"¥{last_close:,.0f}",
-                  delta=f"{(last_close/_prev_close-1)*100:+.2f}%")
-    with c5:
-        _dir_label = "上昇 ↑" if ensemble_pred["dir"] == 1 else "下落 ↓"
         st.metric("終値 予測", f"¥{_close_pred_yen:,.0f}",
                   delta=f"{_close_pred_pct:+.2f}%",
                   help="アンサンブル（高値・安値予測の中間値）")
