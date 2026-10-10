@@ -1446,9 +1446,9 @@ with tab_dash:
     st.divider()
 
     # ── 4. バイアス補正アンサンブル予測 ──
-    st.markdown("#### 🎯 バイアス補正アンサンブル予測")
+    st.markdown(f"#### 🎯 バイアス補正アンサンブル予測　{pred_date.strftime('%m/%d (%a)')} 向け")
     st.caption(
-        f"直近{bias_corrected['n_days']}日の予測誤差（バイアス）を補正した予測値"
+        f"直近{bias_corrected['n_days']}日の予測誤差（バイアス）を補正した予測値　｜　基準終値: ¥{last_close:,.0f}（{last_date}）"
     )
     bc1, bc2, bc3, bc4 = st.columns(4)
     sh_bc = "+" if bias_corrected["high_pct"] >= 0 else ""
