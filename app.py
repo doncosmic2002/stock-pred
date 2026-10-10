@@ -1491,28 +1491,69 @@ with tab_dash:
 with tab_today:
     st.subheader("📊 当日実績 ＋ 翌日 LightGBM 予測")
 
+    _now_jst_t = datetime.utcnow() + timedelta(hours=9)
+    _after_15  = _now_jst_t.hour >= 15
+
     # ── 当日実績（直近確定データ）──
-    today_row = df[["open", "high", "low", "close"]].dropna().iloc[-1]
+    today_row  = df[["open", "high", "low", "close"]].dropna().iloc[-1]
     today_date = df[["open", "high", "low", "close"]].dropna().index[-1].strftime("%Y/%m/%d")
 
-    st.markdown(f"#### 当日実績　（{today_date}）")
-    c1, c2, c3, c4 = st.columns(4)
+    # 前日終値（当日予測の基準）= 当日の1つ前
+    _prev_close_row = df["close"].dropna()
+    _prev_close = float(_prev_close_row.iloc[-2]) if len(_prev_close_row) >= 2 else float(_prev_close_row.iloc[-1])
+
+    # 当日の終値予測（アンサンブル）= 前日終値基準
+    _close_pred_yen = _prev_close * (1 + ensemble_pred["high_pct"] / 100 * 0.5
+                                      + ensemble_pred["low_pct"]  / 100 * 0.5)
+    # 終値予測は高値・安値の中間値（簡易推定）
+    _close_pred_yen = _prev_close * (1 + (ensemble_pred["high_pct"] + ensemble_pred["low_pct"]) / 2 / 100)
+    _close_pred_pct = (_close_pred_yen / _prev_close - 1) * 100
+
+    st.markdown(f"#### 当日　（{today_date}）")
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         st.metric("始値", f"¥{today_row['open']:,.0f}")
     with c2:
-        st.metric("🔺 高値 (Max)", f"¥{today_row['high']:,.0f}",
+        st.metric("🔺 高値", f"¥{today_row['high']:,.0f}",
                   delta=f"{(today_row['high']/today_row['open']-1)*100:+.2f}%")
     with c3:
-        st.metric("🔻 安値 (Min)", f"¥{today_row['low']:,.0f}",
+        st.metric("🔻 安値", f"¥{today_row['low']:,.0f}",
                   delta=f"{(today_row['low']/today_row['open']-1)*100:+.2f}%")
     with c4:
-        st.metric("終値（基準）", f"¥{last_close:,.0f}",
-                  delta=f"{(last_close/today_row['open']-1)*100:+.2f}%")
+        st.metric("終値 実績", f"¥{last_close:,.0f}",
+                  delta=f"{(last_close/_prev_close-1)*100:+.2f}%")
+    with c5:
+        _dir_label = "上昇 ↑" if ensemble_pred["dir"] == 1 else "下落 ↓"
+        st.metric("終値 予測", f"¥{_close_pred_yen:,.0f}",
+                  delta=f"{_close_pred_pct:+.2f}%",
+                  help="アンサンブル（高値・安値予測の中間値）")
+
+    # ── 15時以降：予測 vs 実績 比較 ──
+    if _after_15:
+        st.divider()
+        st.markdown("#### 📋 予測 vs 実績 比較　（本日確定）")
+        _compare_rows = []
+        for _mname, _m in sklearn_models.items():
+            _p = sklearn_preds[_mname]
+            _high_diff = today_row["high"] - _p["high_yen"]
+            _low_diff  = today_row["low"]  - _p["low_yen"]
+            _close_diff = last_close - _prev_close * (1 + (_p["high_pct"] + _p["low_pct"]) / 2 / 100)
+            _compare_rows.append({
+                "モデル":       _mname,
+                "高値予測":     f"¥{_p['high_yen']:,.0f}",
+                "高値実績":     f"¥{today_row['high']:,.0f}",
+                "高値誤差":     f"{_high_diff:+,.0f}円",
+                "安値予測":     f"¥{_p['low_yen']:,.0f}",
+                "安値実績":     f"¥{today_row['low']:,.0f}",
+                "安値誤差":     f"{_low_diff:+,.0f}円",
+            })
+        st.dataframe(pd.DataFrame(_compare_rows).set_index("モデル"), use_container_width=True)
+        st.caption(f"※ 現在時刻 (JST): {_now_jst_t.strftime('%H:%M')}　市場クローズ後の確定値")
 
     st.divider()
 
     # ── 翌日 LightGBM 予測 ──
-    lgb_pred = sklearn_preds["LightGBM"]
+    lgb_pred  = sklearn_preds["LightGBM"]
     lgb_model = sklearn_models["LightGBM"]
 
     st.markdown(f"#### 翌日予測　（LightGBM / 基準: 終値 ¥{last_close:,.0f}）")
@@ -1522,11 +1563,11 @@ with tab_today:
                   f"¥{open_yen_pred:,.0f}",
                   delta=f"{open_pct_pred:+.2f}%")
     with p2:
-        st.metric("🔺 高値予測 (Max)",
+        st.metric("🔺 高値予測",
                   f"¥{lgb_pred['high_yen']:,.0f}",
                   delta=f"{lgb_pred['high_pct']:+.2f}%")
     with p3:
-        st.metric("🔻 安値予測 (Min)",
+        st.metric("🔻 安値予測",
                   f"¥{lgb_pred['low_yen']:,.0f}",
                   delta=f"{lgb_pred['low_pct']:+.2f}%")
 
