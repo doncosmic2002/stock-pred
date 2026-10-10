@@ -1365,26 +1365,16 @@ with tab_dash:
     model_names = list(all_tomorrow.keys())
 
     st.markdown(f"#### 予測一覧テーブル　（{pred_date.strftime('%m/%d')} / {_hlabel}）")
-    # 精度データを辞書化（モデル名→mae_h, mae_l, acc）
-    _accuracy_map = {}
-    for mname, m in sklearn_models.items():
-        _accuracy_map[mname] = (m["mae_h"], m["mae_l"], m["acc"])
-    _accuracy_map["アンサンブル"] = (ens_eval["mae_h"], ens_eval["mae_l"], ens_eval["acc"])
-
     summary_rows = []
     for mname, p in all_tomorrow.items():
         dir_label = "上昇 ↑" if p["dir"] == 1 else "下落 ↓"
         dprob = p["prob_up"] if p["dir"] == 1 else p["prob_down"]
-        mae_h, mae_l, acc = _accuracy_map.get(mname, (None, None, None))
         row = {
-            "モデル":      mname,
-            "予測 高値":   f"¥{p['high_yen']:,.0f}  ({p['high_pct']:+.2f}%)",
-            "予測 安値":   f"¥{p['low_yen']:,.0f}  ({p['low_pct']:+.2f}%)",
-            "終値方向":    dir_label,
-            "上昇確率":    f"{dprob:.1%}",
-            "高値MAE":     f"{mae_h:.3f}%" if mae_h is not None else "─",
-            "安値MAE":     f"{mae_l:.3f}%" if mae_l is not None else "─",
-            "方向正解率":  f"{acc:.1%}"    if acc  is not None else "─",
+            "モデル":    mname,
+            "予測 高値": f"¥{p['high_yen']:,.0f}  ({p['high_pct']:+.2f}%)",
+            "予測 安値": f"¥{p['low_yen']:,.0f}  ({p['low_pct']:+.2f}%)",
+            "終値方向":  dir_label,
+            "上昇確率":  f"{dprob:.1%}",
         }
         summary_rows.append(row)
     # D+1 のときのみバイアス補正行を追加
@@ -1392,14 +1382,11 @@ with tab_dash:
         bc_dir = "上昇 ↑" if bias_corrected["dir"] == 1 else "下落 ↓"
         bc_prob = bias_corrected["prob_up"] if bias_corrected["dir"] == 1 else bias_corrected["prob_down"]
         summary_rows.append({
-            "モデル":      "🎯 バイアス補正アンサンブル",
-            "予測 高値":   f"¥{bias_corrected['high_yen']:,.0f}  ({bias_corrected['high_pct']:+.2f}%)",
-            "予測 安値":   f"¥{bias_corrected['low_yen']:,.0f}  ({bias_corrected['low_pct']:+.2f}%)",
-            "終値方向":    bc_dir,
-            "上昇確率":    f"{bc_prob:.1%}",
-            "高値MAE":     "─",
-            "安値MAE":     "─",
-            "方向正解率":  "─",
+            "モデル":    "🎯 バイアス補正アンサンブル",
+            "予測 高値": f"¥{bias_corrected['high_yen']:,.0f}  ({bias_corrected['high_pct']:+.2f}%)",
+            "予測 安値": f"¥{bias_corrected['low_yen']:,.0f}  ({bias_corrected['low_pct']:+.2f}%)",
+            "終値方向":  bc_dir,
+            "上昇確率":  f"{bc_prob:.1%}",
         })
     st.dataframe(
         pd.DataFrame(summary_rows).set_index("モデル"),
